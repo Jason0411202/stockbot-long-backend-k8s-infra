@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1     # ArgoCD CRD
+kind: Application
+metadata:
+  name: myapp
+  namespace: argocd     # Application 資源放在 argocd namespace
+
+spec:
+  project: default      # ArgoCD Project（權限分組），default 允許任意
+
+  source:
+    repoURL: https://github.com/yourorg/stockbot-long-backend-k8s-manifests.git
+    # ArgoCD 要監聽哪個 Git repo
+
+    targetRevision: main  # 監聽哪個 branch
+    path: overlays/local  # repo 裡的哪個目錄
+                          # 本地用 local，正式環境改 production
+
+  destination:
+    server: https://kubernetes.default.svc   # 部署到當前 cluster
+    namespace: myapp
+
+  syncPolicy:
+    automated:
+      prune: true       # Git 裡刪了的資源，K8s 裡也自動刪
+      selfHeal: true    # 有人手動改了 K8s 資源，自動改回 Git 定義的狀態
+                        # Git repo = Single Source of Truth
+    syncOptions:
+      - CreateNamespace=true   # namespace 不存在就自動建

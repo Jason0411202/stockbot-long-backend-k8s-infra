@@ -1,0 +1,65 @@
+apiVersion: elasticsearch.k8s.elastic.co/v1   # ECK 提供的 API
+kind: Elasticsearch                             # ECK CRD 資源類型
+metadata:
+  name: logs                # ES cluster 名稱，Kibana 連線時會引用
+  namespace: elastic-system  # namespace = K8s 裡的「資料夾」概念
+spec:
+  version: 8.12.0           # ES 版本，ECK 會下載對應的 Docker image
+
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true
+    # 告訴 ECK：HTTP 層不要產生 TLS 憑證、不要用 HTTPS
+    # 這樣 readiness probe 會自動改用 HTTP（配合 xpack.security.http.ssl.enabled: false）
+
+  nodeSets:
+    - name: default
+      count: 1               # 只跑 1 個 node（開發環境）
+                              # 正式環境至少 3 個才有高可用
+      config:
+        node.store.allow_mmap: false
+        # mmap 是記憶體映射技術，需要 vm.max_map_count >= 262144
+        # K3d 環境通常沒設這個 kernel 參數，所以關掉
+
+        # 注意：不要設 discovery.type: single-node
+        # ECK 會自動注入 cluster.initial_master_nodes，兩者衝突
+        # count: 1 已經是單節點，ECK 會自動處理選舉
+
+        xpack.security.enabled: true
+        # 啟用帳號密碼認證，ECK 會自動產生密碼存在 Secret 裡
+
+        xpack.security.http.ssl.enabled: false
+        # 關閉 HTTP 層 TLS（開發環境簡化）
+        # ⚠️ 正式環境要開
+
+        xpack.security.transport.ssl.enabled: true
+        # transport 層（node 間通訊）仍需要 TLS，ECK 會自動管理憑證
+
+      podTemplate:
+        spec:
+          containers:
+            - name: elasticsearch
+              env:
+                - name: ES_JAVA_OPTS
+                  value: "-Xms1g -Xmx1g"
+                  # ES 是 Java 寫的，設定 JVM heap
+                  # -Xms = 初始 heap，-Xmx = 最大 heap
+                  # 建議兩個設一樣，避免動態調整的效能損耗
+              resources:
+                requests:
+                  memory: 2Gi    # ES 很吃記憶體，2GB 是開發環境最低
+                  cpu: 500m
+                limits:
+                  memory: 2Gi    # limits = requests → Guaranteed QoS
+                  cpu: "1"       # K8s 資源不夠時最後才被砍
+
+      volumeClaimTemplates:
+        - metadata:
+            name: elasticsearch-data
+          spec:
+            accessModes: ["ReadWriteOnce"]
+            # ReadWriteOnce = 同一時間只有一個 node 能掛載
+            resources:
+              requests:
+                storage: 20Gi   # ES 索引會比原始 log 大（倒排索引）

@@ -1,0 +1,21 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kibana
+  namespace: elastic-system
+  # ECK Kibana 已關閉 TLS（kibana.yaml http.tls.selfSignedCertificate.disabled: true）
+  # 所以不需要 backend-protocol: "HTTPS"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: kibana.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: logs-kb-http
+                # ECK 自動建立，格式：{kibana-name}-kb-http
+                port:
+                  number: 5601

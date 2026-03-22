@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: argocd
+  namespace: argocd
+  annotations:
+    nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+    # ArgoCD server 後端也是 HTTPS
+
+    nginx.ingress.kubernetes.io/ssl-passthrough: "true"
+    # SSL Passthrough：TLS 連線直接穿透 nginx，由 ArgoCD 自己處理
+    # ArgoCD 用同一個 port 處理 HTTPS 和 gRPC（CLI 用 gRPC）
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: argocd.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: argocd-server
+                port:
+                  number: 443

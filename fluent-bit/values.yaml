@@ -1,0 +1,101 @@
+resources:
+  # Fluent Bit 用 C 語言寫，非常輕量（對比 Logstash 要 500MB-1GB）
+  requests:
+    cpu: 50m       # 只需要 5% CPU
+    memory: 64Mi   # 只需要 64 MB
+  limits:
+    cpu: 200m
+    memory: 128Mi
+
+# ─── 覆寫 DaemonSet 預設 volume 掛載 ───
+# chart 預設的 daemonSetVolumes 會掛載 /etc/machine-id（hostPath type: File）
+# K3d 的 node container 裡沒有這個檔案 → FailedMount
+# 用 chart 提供的 daemonSetVolumes / daemonSetVolumeMounts 覆寫預設值
+# 只保留 Fluent Bit 收 log 實際需要的兩個 hostPath
+daemonSetVolumeMounts:
+  - name: varlog
+    mountPath: /var/log
+  - name: varlibdockercontainers
+    mountPath: /var/lib/docker/containers
+    readOnly: true
+
+daemonSetVolumes:
+  - name: varlog
+    hostPath:
+      path: /var/log
+  - name: varlibdockercontainers
+    hostPath:
+      path: /var/lib/docker/containers
+
+config:
+  # ─── Fluent Bit 設定分四個區塊 ───
+  # ⚠️ 重要：| block 裡面不能放 # 註解！
+  #    Fluent Bit classic config parser 會把 # 當成值的一部分或報縮排錯誤
+  #    所有說明都放在 YAML 層級的 # 註解裡
+  #
+  # SERVICE：全域設定（Flush 頻率、log 等級）
+  # INPUT：tail 模式監控 /var/log/containers/*.log
+  # FILTER：kubernetes filter 加 metadata + grep 排除系統 namespace
+  # OUTPUT：送到 Elasticsearch
+
+  # Flush=5 → 每 5 秒送出緩衝區的 log
+  # Daemon=off → K8s container 不需要 daemon 模式
+  # HTTP_Server=On → 啟用 port 2020 的 health endpoint，給 K8s liveness/readiness probe 用
+  service: |
+    [SERVICE]
+        Flush         5
+        Log_Level     info
+        Daemon        off
+        HTTP_Server   On
+        HTTP_Listen   0.0.0.0
+        HTTP_Port     2020
+        Parsers_File  /fluent-bit/etc/parsers.conf
+
+  # tail = 像 tail -f 持續監控新增 log
+  # Parser=cri → K3s 用 containerd，log 格式是 CRI
+  # Mem_Buf_Limit=5M → 記憶體緩衝上限（v4.x 只接受 M 不接受 MB）
+  inputs: |
+    [INPUT]
+        Name              tail
+        Path              /var/log/containers/*.log
+        Parser            cri
+        Tag               kube.*
+        Refresh_Interval  5
+        Mem_Buf_Limit     5M
+        Skip_Long_Lines   On
+
+  # kubernetes filter：自動幫每筆 log 加上 pod_name、namespace 等 metadata
+  # Merge_Log=On → JSON log 攤平合併，Kibana 能直接搜 level:info、status:500
+  # grep Exclude → 排除系統 namespace 的 log（量大但通常不需要看）
+  filters: |
+    [FILTER]
+        Name                kubernetes
+        Match               kube.*
+        Merge_Log           On
+        Merge_Log_Key       log_parsed
+        Keep_Log            Off
+        K8S-Logging.Parser  On
+        K8S-Logging.Exclude On
+
+    [FILTER]
+        Name    grep
+        Match   kube.*
+        Exclude $kubernetes['namespace_name'] ^(kube-system|elastic-system|monitoring|logging)$
+
+  # 輸出到 Elasticsearch
+  # Host = ES 的 K8s 內部 DNS：{service-name}.{namespace}
+  # TLS=Off → ES 的 HTTP TLS 已關閉（elasticsearch.yaml http.tls disabled）
+  # Index 按天分（方便刪舊資料、加快搜尋）
+  # Suppress_Type_Name=On → ES 8.x 移除了 type 概念
+  outputs: |
+    [OUTPUT]
+        Name               es
+        Match              kube.*
+        Host               logs-es-http.elastic-system
+        Port               9200
+        HTTP_User          elastic
+        HTTP_Passwd        ${ES_PASSWORD}
+        TLS                Off
+        Index              myapp-logs-%Y.%m.%d
+        Suppress_Type_Name On
+        Replace_Dots       On

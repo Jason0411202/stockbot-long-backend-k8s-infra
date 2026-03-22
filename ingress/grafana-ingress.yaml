@@ -1,0 +1,20 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: monitoring       # 跟 Grafana Service 同一個 namespace
+spec:
+  ingressClassName: nginx     # 用 nginx Ingress Controller 處理
+  rules:
+    - host: grafana.local     # 域名（需要在 hosts 檔案設定）
+      http:
+        paths:
+          - path: /
+            pathType: Prefix  # 所有以 / 開頭的路徑都匹配
+            backend:
+              service:
+                name: monitoring-grafana
+                # kube-prometheus-stack 自動建立的 Service
+                # 格式：{release-name}-grafana
+                port:
+                  number: 80

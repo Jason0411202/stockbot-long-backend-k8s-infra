@@ -1,0 +1,34 @@
+auth:
+  # ─── 資料庫認證設定 ───
+  # ⚠️ 密碼不寫在這裡！這個檔案會進 Git（可能是 public repo）
+  # 密碼透過 install-all.sh 的 --set 從環境變數注入
+  # 見 .env.example
+  database: myapp                           # 自動建立的資料庫名稱
+  username: myapp                           # 自動建立的使用者
+
+primary:
+  persistence:
+    enabled: true       # 開啟持久化儲存
+    size: 10Gi          # 申請 10 GB 磁碟
+    # 這會建立 PVC（PersistentVolumeClaim）
+    # Pod 重啟後資料還在
+
+  resources:
+    # K8s 裡每個 container 都應該設定資源請求和限制
+    requests:
+      cpu: 250m        # 最少需要 0.25 核（1000m = 1 核）
+      memory: 512Mi    # 最少需要 512 MB
+    limits:
+      cpu: "1"         # 最多用 1 核（超過會被限速）
+      memory: 1Gi      # 最多用 1 GB（超過會被 OOM Kill）
+
+metrics:
+  enabled: true         # 啟用 Prometheus metrics exporter
+                        # 會額外跑一個 sidecar，暴露 MariaDB 內部指標
+  serviceMonitor:
+    enabled: true       # 建立 ServiceMonitor CRD
+                        # 告訴 Prometheus：「這個 Service 有 /metrics 可以抓」
+    namespace: monitoring
+    labels:
+      release: monitoring   # ⚡ 必須跟 Helm release name 一致
+                            # Prometheus 靠這個 label 找 ServiceMonitor

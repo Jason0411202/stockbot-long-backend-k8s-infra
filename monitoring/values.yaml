@@ -1,0 +1,55 @@
+grafana:
+  # ⚠️ adminPassword 不寫在這裡，透過 install-all.sh 的 --set 注入
+  persistence:
+    enabled: true             # 持久化設定（Dashboard 等）
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+prometheus:
+  prometheusSpec:
+    retention: 7d             # metrics 保留 7 天，超過自動刪
+    resources:
+      requests:
+        cpu: 250m
+        memory: 512Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 10Gi
+
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    # ⚡ 很重要！設成 false = 去找所有 namespace 的 ServiceMonitor
+    # 不設的話 Prometheus 只找特定 label 的，你的 app 會被漏掉
+
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 128Mi
+
+nodeExporter:
+  # 跑在每個 node 上（DaemonSet），蒐集 CPU/RAM/Disk/網路指標
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi

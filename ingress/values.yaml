@@ -1,0 +1,22 @@
+controller:
+  replicaCount: 1     # 開發 1 個就好，正式環境建議 2-3 個
+
+  service:
+    type: LoadBalancer
+    # 雲端會自動分配公網 IP
+    # K3d 裡流量透過 loadbalancer container 轉發到你電腦的 80/443
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+  metrics:
+    enabled: true     # 讓 Prometheus 也能監控 Ingress Controller
+    serviceMonitor:
+      enabled: true
+      additionalLabels:
+        release: monitoring

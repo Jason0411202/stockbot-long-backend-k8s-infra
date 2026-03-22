@@ -1,0 +1,34 @@
+apiVersion: kibana.k8s.elastic.co/v1   # ECK CRD
+kind: Kibana
+metadata:
+  name: logs
+  namespace: elastic-system
+spec:
+  version: 8.12.0    # 版本要跟 ES 一致，不然可能有相容性問題
+
+  count: 1            # Kibana 是 Web UI，一個就夠
+                      # 它不儲存資料，只是 ES 的「前端介面」
+
+  http:
+    tls:
+      selfSignedCertificate:
+        disabled: true
+    # 關閉 Kibana HTTP TLS（開發環境）
+    # 跟 elasticsearch.yaml 的做法一致
+    # 這樣前端 HTTP ingress 進來不會被擋 "A secure connection is required"
+
+  elasticsearchRef:
+    name: logs        # 指向上面的 Elasticsearch
+                      # ECK 會自動把 ES 連線資訊和密碼注入 Kibana Pod
+
+  podTemplate:
+    spec:
+      containers:
+        - name: kibana
+          resources:
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            limits:
+              memory: 1Gi
+              cpu: 500m

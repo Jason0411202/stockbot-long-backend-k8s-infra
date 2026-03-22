@@ -1,0 +1,5 @@
+# 真實密碼檔案，永遠不進 Git
+.env
+
+# macOS
+.DS_Store
