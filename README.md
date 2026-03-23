@@ -398,3 +398,31 @@ kubectl exec -it <pod> -n <ns> -- /bin/sh              # 進入 Pod shell
 kubectl rollout restart deployment myapp -n myapp      # 重啟所有 Pod
 kubectl top pods -A                                    # 資源使用量
 ```
+
+---
+
+## （可選）匯入 App 環境變數到 K8s
+
+App 本身所需的環境變數（.env）需要匯入為 K8s Secret，供 Pod 使用。
+
+### 步驟
+
+1. 切換到目標 `.env` 的所在目錄
+2. 執行以下指令：
+
+```bash
+kubectl -n myapp create secret generic myapp-env \
+  --from-env-file=.env \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+### 驗證
+
+```bash
+kubectl -n myapp get secret myapp-env -o yaml   # 確認 Secret 已建立
+kubectl -n myapp rollout restart deployment myapp  # 重啟 Pod 以套用新的環境變數
+```
+
+### 更新
+
+修改 `.env` 後重新執行上面的 `kubectl create secret` 指令即可，`--dry-run=client -o yaml | kubectl apply -f -` 會自動覆蓋舊值。

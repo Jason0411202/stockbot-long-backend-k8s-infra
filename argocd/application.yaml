@@ -12,7 +12,7 @@ spec:
     # ArgoCD 要監聯哪個 Git repo（由 install-all.sh 從 .env 注入）
 
     targetRevision: main  # 監聽哪個 branch
-    path: base            # repo 裡的哪個目錄
+    path: .               # repo 根目錄（Chart.yaml 在根目錄，ArgoCD 自動偵測 Helm）
 
   destination:
     server: https://kubernetes.default.svc   # 部署到當前 cluster
