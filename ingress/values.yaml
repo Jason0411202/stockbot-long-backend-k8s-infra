@@ -9,10 +9,10 @@ controller:
   resources:
     requests:
       cpu: 100m
-      memory: 128Mi
-    limits:
-      cpu: 500m
       memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 512Mi
 
   metrics:
     enabled: true     # 讓 Prometheus 也能監控 Ingress Controller

@@ -8,12 +8,11 @@ spec:
   project: default      # ArgoCD Project（權限分組），default 允許任意
 
   source:
-    repoURL: https://github.com/yourorg/stockbot-long-backend-k8s-manifests.git
-    # ArgoCD 要監聽哪個 Git repo
+    repoURL: __ARGOCD_REPO_URL__
+    # ArgoCD 要監聯哪個 Git repo（由 install-all.sh 從 .env 注入）
 
     targetRevision: main  # 監聽哪個 branch
-    path: overlays/local  # repo 裡的哪個目錄
-                          # 本地用 local，正式環境改 production
+    path: base            # repo 裡的哪個目錄
 
   destination:
     server: https://kubernetes.default.svc   # 部署到當前 cluster

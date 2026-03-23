@@ -32,12 +32,13 @@ fi
 source .env
 # source .env 把 KEY=VALUE 載入成 shell 環境變數
 
-for var in MARIADB_ROOT_PASSWORD MARIADB_PASSWORD GRAFANA_PASSWORD; do
+for var in MARIADB_ROOT_PASSWORD MARIADB_PASSWORD GRAFANA_PASSWORD ES_PASSWORD ARGOCD_REPO_URL ARGOCD_PASSWORD; do
   if [ -z "${!var}" ]; then
-    echo "❌ .env 裡的 $var 是空的，請填入密碼"
+    echo "❌ .env 裡的 $var 是空的，請填入"
     exit 1
   fi
 done
+# ACME_EMAIL 是選填（cert-manager 正式環境才需要）
 # ${!var} 是 bash 間接引用：var="XXX" → ${!var} = $XXX
 
 echo "✅ 密碼已從 .env 載入"
@@ -100,6 +101,10 @@ else
   kubectl apply -f https://download.elastic.co/downloads/eck/2.11.1/operator.yaml
   echo "等待 ECK Operator 啟動..."
   kubectl -n elastic-system wait --for=condition=Ready pod -l control-plane=elastic-operator --timeout=120s
+  # 預建 elastic 使用者密碼 secret，ECK 會直接採用而不隨機產生
+  kubectl -n elastic-system create secret generic logs-es-elastic-user \
+    --from-literal=elastic="$ES_PASSWORD" \
+    --dry-run=client -o yaml | kubectl apply -f -
   kubectl apply -f elastic/elasticsearch.yaml
   kubectl apply -f elastic/kibana.yaml
   echo "等待 Elasticsearch 啟動（可能要 2-3 分鐘）..."
@@ -115,7 +120,7 @@ echo "========================================="
 echo "  [3/7] 取得 ES 密碼 + 安裝 Fluent Bit"
 echo "========================================="
 
-ES_PASSWORD=$(kubectl -n elastic-system get secret logs-es-elastic-user -o jsonpath='{.data.elastic}' | base64 -d)
+# ES_PASSWORD 已從 .env 載入，不再從 K8s secret 讀取
 
 if pods_ready logging "app.kubernetes.io/name=fluent-bit"; then
   echo "⏭️  Fluent Bit 已在運行，跳過"
@@ -172,7 +177,11 @@ else
   kubectl -n argocd wait --for=condition=Ready pod -l app.kubernetes.io/name=argocd-server --timeout=180s || true
   echo "✅ ArgoCD 安裝完成"
 fi
-ARGOCD_PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d 2>/dev/null || echo "尚未產生")
+
+# 用 .env 的密碼覆寫 ArgoCD admin 密碼（每次都執行，確保一致）
+ARGOCD_HASH=$(python3 -c "import bcrypt; print(bcrypt.hashpw(b'${ARGOCD_PASSWORD}', bcrypt.gensalt()).decode())")
+kubectl -n argocd patch secret argocd-secret -p \
+  "{\"stringData\": {\"admin.password\": \"${ARGOCD_HASH}\", \"admin.passwordMtime\": \"$(date -u +%FT%TZ)\"}}"
 
 
 echo ""
@@ -188,6 +197,15 @@ else
     -f ingress/values.yaml \
     --wait --timeout 3m
   kubectl -n ingress-nginx wait --for=condition=Ready pod -l app.kubernetes.io/name=ingress-nginx --timeout=120s || true
+  # 等 admission webhook endpoint 實際可用
+  # Pod Ready 不代表 webhook service 已有 endpoint，需要額外確認
+  echo "等待 admission webhook 就緒..."
+  for i in $(seq 1 30); do
+    if kubectl -n ingress-nginx get endpoints ingress-nginx-controller-admission -o jsonpath='{.subsets[0].addresses[0].ip}' 2>/dev/null | grep -q .; then
+      break
+    fi
+    sleep 2
+  done
   echo "✅ Ingress Controller 安裝完成"
 fi
 # Ingress 規則每次都 apply（冪等，確保最新）
@@ -202,8 +220,9 @@ echo "========================================="
 echo "  [7/7] 註冊 ArgoCD Application"
 echo "========================================="
 
-kubectl apply -f argocd/application.yaml
-echo "✅ ArgoCD 開始監聽 manifest repo"
+# 用 sed 把佔位符替換成 .env 的值，透過 pipe 送給 kubectl（不改動原始檔案）
+sed "s|__ARGOCD_REPO_URL__|${ARGOCD_REPO_URL}|g" argocd/application.yaml | kubectl apply -f -
+echo "✅ ArgoCD 開始監聽 manifest repo: $ARGOCD_REPO_URL"
 
 
 echo ""
@@ -215,6 +234,8 @@ echo "📌 請確認 hosts 已設定："
 echo "   127.0.0.1  myapp.local grafana.local kibana.local argocd.local"
 echo ""
 echo "🌐 App:       http://myapp.local         （等 ArgoCD sync 完才有）"
-echo "📊 Grafana:   http://grafana.local        帳號: admin / 密碼:（你在 .env 設的）"
-echo "📋 Kibana:    http://kibana.local         帳號: elastic / 密碼: $ES_PASSWORD"
-echo "🚀 ArgoCD:    https://argocd.local        帳號: admin / 密碼: $ARGOCD_PASS"
+echo "📊 Grafana:   http://grafana.local        帳號: admin / 密碼: .env GRAFANA_PASSWORD"
+echo "📋 Kibana:    http://kibana.local         帳號: elastic / 密碼: .env ES_PASSWORD"
+echo "🚀 ArgoCD:    https://argocd.local        帳號: admin / 密碼: .env ARGOCD_PASSWORD"
+echo ""
+echo "💡 所有帳密都在 .env 裡統一管理"

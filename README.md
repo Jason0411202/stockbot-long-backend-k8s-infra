@@ -106,19 +106,23 @@ k3d cluster delete mylab
 
 ## 使用前需要修改的地方
 
-> ⚠️ **以下是必須根據你的環境修改的項目，不改會導致安裝失敗或功能異常。**
+> ⚠️ **只需要修改 `.env` 一個檔案，所有密碼和設定都在這裡統一管理。**
 
-| 檔案 | 要改的地方 | 說明 |
-|------|-----------|------|
-| `.env` | `MARIADB_ROOT_PASSWORD`、`MARIADB_PASSWORD`、`GRAFANA_PASSWORD` | 填入你自己的密碼 |
-| `argocd/application.yaml` | `spec.source.repoURL` | 改成你的 manifest repo 的 Git URL |
-| `cert-manager/clusterissuer.yaml` | `spec.acme.email` | 改成你的 email（正式環境申請 TLS 憑證用） |
+| 變數 | 必填 | 說明 |
+|------|:----:|------|
+| `MARIADB_ROOT_PASSWORD` | ✅ | MariaDB root 密碼 |
+| `MARIADB_PASSWORD` | ✅ | myapp 使用者的 DB 密碼 |
+| `GRAFANA_PASSWORD` | ✅ | Grafana Web UI 登入密碼（帳號: admin） |
+| `ES_PASSWORD` | ✅ | Elasticsearch / Kibana 登入密碼（帳號: elastic） |
+| `ARGOCD_REPO_URL` | ✅ | manifest repo 的 Git URL |
+| `ARGOCD_PASSWORD` | ✅ | ArgoCD Web UI 登入密碼（帳號: admin） |
+| `ACME_EMAIL` | 選填 | Let's Encrypt 憑證申請用 email（正式環境才需要） |
 
-以下是可選修改（根據需求調整）：
+以下是可選修改（根據需求調整，直接改 YAML 檔案）：
 
 | 檔案 | 可調整項目 | 預設值 |
 |------|-----------|--------|
-| `argocd/application.yaml` | `spec.source.path` | `overlays/local`（本地開發），正式環境改 `overlays/production` |
+| `argocd/application.yaml` | `spec.source.path` | `base` |
 | `mariadb/values.yaml` | `auth.database`、`auth.username` | `myapp` |
 | `mariadb/values.yaml` | `primary.persistence.size` | `10Gi` |
 | `elastic/elasticsearch.yaml` | `spec.version` | `8.12.0` |
@@ -153,8 +157,8 @@ stockbot-long-backend-k8s-infra/
 │   └── application.yaml        # 指向 manifest repo，讓 ArgoCD 監聽
 ├── cert-manager/
 │   └── clusterissuer.yaml      # 正式環境 TLS 憑證
-├── install-all.sh              # 一鍵安裝所有基礎設施
-├── .env.example                # 密碼範本（不含真實值，安全地 commit）
+├── install-all.sh              # 一鍵安裝（含跳過機制，可重複執行）
+├── .env.example                # 所有密碼與設定的範本（不含真實值，安全地 commit）
 └── .gitignore                  # 排除 .env（真實密碼永遠不進 Git）
 ```
 
@@ -164,10 +168,12 @@ stockbot-long-backend-k8s-infra/
 
 這個 repo 可以安全地設成 **public**，因為：
 
-1. 所有密碼都不寫在 YAML 裡
-2. 密碼只存在 `.env` 檔案（被 `.gitignore` 排除，不進 Git）
-3. `install-all.sh` 從 `.env` 讀取密碼，用 `--set` 注入 Helm
-4. myapp 的 DB Secret 也由 `install-all.sh` 建在 K8s 裡，不放在任何 Git repo
+1. **所有密碼和環境設定**都集中在 `.env` 一個檔案（被 `.gitignore` 排除，不進 Git）
+2. YAML 裡使用佔位符（如 `__ARGOCD_REPO_URL__`），由 `install-all.sh` 在 apply 時用 `sed` 替換
+3. Helm 密碼透過 `--set` 注入，不寫在 values.yaml 裡
+4. ES 密碼透過預建 K8s Secret 注入，ECK 直接採用而不隨機產生
+5. ArgoCD 密碼透過 bcrypt hash patch 覆寫
+6. myapp 的 DB Secret 也由 `install-all.sh` 建在 K8s 裡，不放在任何 Git repo
 
 ---
 
@@ -209,8 +215,9 @@ MariaDB 的 Helm chart 客製化設定。密碼透過 `install-all.sh` 的 `--se
 ECK（Elastic Cloud on Kubernetes）CRD，部署單節點 Elasticsearch。
 
 重點設定：
-- `discovery.type: single-node`：開發環境用單節點
+- 開發環境用單節點（`count: 1`，ECK 自動處理 discovery）
 - `xpack.security.http.ssl.enabled: false`：開發環境關閉 HTTP TLS
+- `http.tls.selfSignedCertificate.disabled: true`：告訴 ECK 不產生 HTTP 層憑證
 - `ES_JAVA_OPTS: "-Xms1g -Xmx1g"`：JVM heap 固定 1GB
 - `memory: 2Gi`：ES 最低需要 2GB
 - `storage: 20Gi`：索引儲存空間
@@ -219,6 +226,7 @@ ECK（Elastic Cloud on Kubernetes）CRD，部署單節點 Elasticsearch。
 
 ECK CRD，部署 Kibana（ES 的 Web UI）。版本需跟 ES 一致。
 透過 `elasticsearchRef.name: logs` 自動連接 ES。
+`http.tls.selfSignedCertificate.disabled: true`：關閉 Kibana HTTPS，讓 HTTP Ingress 能正常存取。
 
 ### fluent-bit/values.yaml
 
@@ -230,7 +238,7 @@ Fluent Bit 以 DaemonSet 方式部署（每個 node 一個），讀取所有 con
 3. **FILTER (grep)**：排除系統 namespace 的 log（kube-system、elastic-system 等）
 4. **OUTPUT**：送到 ES，每天一個 index（`myapp-logs-%Y.%m.%d`）
 
-ES 密碼從環境變數 `${ES_PASSWORD}` 讀取，由安裝腳本從 K8s Secret 注入。
+ES 密碼從環境變數 `${ES_PASSWORD}` 讀取，由安裝腳本從 `.env` 注入 K8s Secret。
 
 ### monitoring/values.yaml
 
@@ -250,7 +258,7 @@ Nginx Ingress Controller 的 Helm values。Ingress Controller 是 cluster 的「
 Ingress 路由規則，將 `.local` 域名對應到各服務。
 
 注意事項：
-- **Kibana**：需要 `backend-protocol: "HTTPS"` annotation，因為 ECK 的 Kibana 後端是 HTTPS
+- **Kibana**：開發環境已關閉 Kibana HTTPS，不需要 `backend-protocol` annotation
 - **ArgoCD**：需要 `backend-protocol: "HTTPS"` + `ssl-passthrough: "true"`，因為 ArgoCD 用同一個 port 處理 HTTPS 和 gRPC
 
 ### argocd/application.yaml
@@ -259,8 +267,8 @@ ArgoCD Application CRD，是本 repo 和 `stockbot-long-backend-k8s-manifests` r
 告訴 ArgoCD：「去監聽 manifest repo，自動部署裡面的設定。」
 
 重點設定：
-- `source.repoURL`：**必須改**成你的 manifest repo Git URL
-- `source.path`：本地用 `overlays/local`，正式環境改 `overlays/production`
+- `source.repoURL`：從 `.env` 的 `ARGOCD_REPO_URL` 注入（佔位符 `__ARGOCD_REPO_URL__`）
+- `source.path`：`base`（manifest repo 的目錄）
 - `syncPolicy.automated.prune: true`：Git 裡刪了的資源，K8s 裡也自動刪
 - `syncPolicy.automated.selfHeal: true`：手動改了 K8s 資源，自動改回 Git 定義的狀態
 
@@ -282,19 +290,20 @@ helm install cert-manager jetstack/cert-manager \
 
 ## install-all.sh 安裝流程
 
-腳本按以下順序安裝 7 個元件：
+腳本按以下順序安裝，已成功的步驟會自動跳過（可重複執行）：
 
-| 步驟 | 元件 | 說明 |
-|------|------|------|
-| 1/7 | MariaDB + DB Secret | Helm 安裝 MariaDB，用 kubectl 建立 myapp-db Secret |
-| 2/7 | ECK + ES + Kibana | 安裝 ECK Operator，部署 Elasticsearch 和 Kibana |
-| 3/7 | Fluent Bit | 取得 ES 密碼，建立 Secret，Helm 安裝 Fluent Bit |
-| 4/7 | Prometheus + Grafana | Helm 安裝 kube-prometheus-stack |
-| 5/7 | Ingress Controller + 規則 | Helm 安裝 nginx-ingress，套用所有 Ingress YAML |
-| 6/7 | ArgoCD | kubectl 安裝 ArgoCD manifests |
-| 7/7 | ArgoCD Application | 註冊 Application，開始監聽 manifest repo |
+| 步驟 | 元件 | 跳過條件 | 密碼來源 |
+|------|------|---------|---------|
+| 0/7 | Prometheus CRDs | CRD 已存在 | - |
+| 1/7 | MariaDB + DB Secret | Pod Running | `.env` `MARIADB_*` |
+| 2/7 | ECK + ES + Kibana | ES Pod Running | `.env` `ES_PASSWORD` |
+| 3/7 | Fluent Bit | Pod Running | `.env` `ES_PASSWORD` |
+| 4/7 | Prometheus + Grafana | Helm deployed | `.env` `GRAFANA_PASSWORD` |
+| 5/7 | ArgoCD | Pod Running | `.env` `ARGOCD_PASSWORD`（bcrypt hash 覆寫） |
+| 6/7 | Ingress Controller + 規則 | Helm deployed | - |
+| 7/7 | ArgoCD Application | -（每次 apply） | `.env` `ARGOCD_REPO_URL`（sed 佔位符替換） |
 
-所有密碼從 `.env` 讀取，透過 `--set` 注入 Helm 或用 `kubectl create secret` 建立。
+所有密碼從 `.env` 讀取，透過 `--set` 注入 Helm、`kubectl create secret` 建立、或 `sed` 佔位符替換。
 
 ---
 
@@ -320,9 +329,9 @@ kubectl get ingress -A
 | 服務 | 網址 | 帳號 / 密碼 |
 |------|------|-------------|
 | App | http://myapp.local | -（等 ArgoCD sync 完才有） |
-| Grafana | http://grafana.local | admin / （你在 .env 設的） |
-| Kibana | http://kibana.local | elastic / （安裝時顯示的密碼） |
-| ArgoCD | https://argocd.local | admin / （安裝時顯示的密碼） |
+| Grafana | http://grafana.local | admin / `.env` `GRAFANA_PASSWORD` |
+| Kibana | http://kibana.local | elastic / `.env` `ES_PASSWORD` |
+| ArgoCD | https://argocd.local | admin / `.env` `ARGOCD_PASSWORD` |
 
 ```bash
 # 快速測試
