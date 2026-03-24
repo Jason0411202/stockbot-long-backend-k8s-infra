@@ -84,9 +84,10 @@ fi
 # DB Secret 每次都確保存在（冪等）
 DB_DSN="myapp:${MARIADB_PASSWORD}@tcp(mariadb.myapp.svc.cluster.local:3306)/myapp?parseTime=true"
 kubectl -n myapp create secret generic myapp-db \
-  --from-literal=dsn="$DB_DSN" \
+  --from-literal=DB_DSN="$DB_DSN" \
   --dry-run=client -o yaml | kubectl apply -f -
 echo "✅ DB Secret 已確認"
+
 
 
 echo ""
